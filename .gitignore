@@ -4,6 +4,7 @@ cheribsd-patches/
 CMakeFiles/
 CMakeLists.txt
 Makefile
+grab_dep.sh
 
 
 # orig
