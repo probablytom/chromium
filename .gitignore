@@ -1,3 +1,12 @@
+# TOM ADDED
+freebsd-ports/
+cheribsd-patches/
+CMakeFiles/
+CMakeLists.txt
+Makefile
+
+
+# orig
 /client-py/
 *.bak
 *.code-workspace
