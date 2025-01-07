@@ -303,6 +303,9 @@
 [submodule "third_party/hunspell_dictionaries"]
 	path = third_party/hunspell_dictionaries
 	url = https://chromium.googlesource.com/chromium/deps/hunspell_dictionaries
+[submodule "third_party/icu"]
+	path = third_party/icu
+	url = https://chromium.googlesource.com/chromium/deps/icu
 [submodule "third_party/javalang/src"]
 	path = third_party/javalang/src
 	url = https://chromium.googlesource.com/external/github.com/c2nes/javalang
@@ -611,6 +614,10 @@
 	path = chromeos/assistant/internal
 	url = https://chrome-internal.googlesource.com/chrome/assistant
 	gclient-condition = checkout_src_internal and checkout_chromeos
+[submodule "build/fuchsia/internal"]
+	path = build/fuchsia/internal
+	url = https://chrome-internal.googlesource.com/fuchsia/build
+	gclient-condition = checkout_fuchsia_internal and checkout_src_internal
 [submodule "chrome/app/theme/default_100_percent/google_chrome"]
 	path = chrome/app/theme/default_100_percent/google_chrome
 	url = https://chrome-internal.googlesource.com/chrome/theme/default_100_percent/google_chrome
@@ -859,18 +866,3 @@
 	path = webkit/data/test_shell/plugins
 	url = https://chrome-internal.googlesource.com/chrome/data/webkit_plugin_tests
 	gclient-condition = checkout_src_internal
-[submodule "build"]
-	path = build
-	url = https://chromium.googlesource.com/chromium/src/build
-[submodule "buildtools"]
-	path = buildtools
-	url = https://chromium.googlesource.com/chromium/src/buildtools
-[submodule "tools/clang"]
-	path = tools/clang
-	url = https://chromium.googlesource.com/chromium/src/tools/clang
-[submodule "base/trace_event/common"]
-	path = base/trace_event/common
-	url = https://chromium.googlesource.com/chromium/src/base/trace_event/common
-[submodule "third_party/icu"]
-	path = third_party/icu
-	url = https://chromium.googlesource.com/chromium/src/third_party/icu

@@ -1,8 +1,0 @@
-{
-   "aggregation_coordinator_origin": "https://publickeyservice.msmt.gcp.privacysandboxservices.com",
-   "aggregation_service_payloads": [ {
-      "key_id": "example_id",
-      "payload": "zVoqpDfLbzTgAq9uCvWTtg8w8xYrwtHj6ZFNs9yo50oWr6/5kOThIosVLNfT5Fk5ia/NK65uannmFKAwd4HXnkZs+SVTuh9B2rPSXniSDR5xiiY17Yf22ZCPSorsLMYAtmYaybSU3aiXDaD2OazG3qBpkUN0qEOKKcSZ27WFSlpATqGWnG6wpD758YtSBAHcx2wJKfmYYlAXEPfHnpB5KLbgpoX5sgMYGab5UjRrLo8LXRglmxkCkbj6Y6HP6L3Syo4cB5SVpSjFhD8CXPLfR725I2DdjNfo4joheEk5gfOhf++K92Ed4zuUR8Q23fCz7pf9+BVXeoK4CxdzImpPAlZO6OV49JCnPOxhtqTljH1ywQBJDSknFYDKQF0b7kjn3cj8/vz1Y929nOhiwt/3MpZTnmNu+zMQN3Tk73VhzFfTd80G/UNk+0haS747X5px9apSnb5ixGBZcv09Xd8IFYVjK/lDhObCK0SPw0WF/mZZqmOg8/saMQ7+/i6UFmRckEv0Toiunk53cl3LznbWsnPqptgOu7ydvZg3xKahPCq6bc0015nnkBx1Aey2p2mz0qOTCAASb0CJDIPvoVoeUxeicrI8sHvRZHV1Xa2rlyngRC5676MPdQPXTrhKRxbJa0q0QGv+vfglCyy/ilxxVCvtoaM9PlYJQ8/rFSv3q/uL1ouMsR4ktsJwzuUy/VLKpm+RAtAuGC2uW22MwTLuOgIfvdH5BIq9DTC/ckwnkq+6WdKsAybHIRBUSl/p6Pe3LBqW0gr7qLP5Ji9QLZ6b/3MCDWQYTYPF/pVqWqORahC7w8GKi1ILC5h9dx0ytCPi2z84w7SQfwW+j9pAM0H1OhuAo+ZFyP+n9xQRNH4WZvOPh+gPZ220S7vJXYeI87aOcRBK07kDJ33cdABGDhBprFZSViszAuJUsr0/eDg4bZDZcnKzjuOFb17e5tJkIVlmQKXKOHPC+A1uBcv1avMBuj6+ZJWRsqw/PRil2JY7h1A/FSmsYFNaQp8qcxI5IVA8n5O3qWf6Jm2Cx/dDD8tb2OcSBjO8VZN5q9h1OMiATXzFDROy5mWaD6T5rTNRJcYiS6sQJhtlKp00banuer73QSeTP8c484fxFIGdKvmE081tFvU6NW0RRcyu0zL4GJ4ZM2QawQZtBC5pXChrciBDmKKWb/J5kFRjExVWk3VfmA=="
-   } ],
-   "shared_info": "{\"api\":\"attribution-reporting\",\"attribution_destination\":\"https://conversion.test\",\"report_id\":\"21abd97f-73e8-4b88-9389-a9fee6abda5e\",\"reporting_origin\":\"https://report.test\",\"scheduled_report_time\":\"1234486400\",\"source_registration_time\":\"0\",\"version\":\"1.0\"}"
-}

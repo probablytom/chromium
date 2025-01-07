@@ -1,0 +1,962 @@
+//
+// Copyright 2024 The ANGLE Project Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+//
+// ContextWgpu.cpp:
+//    Implements the class methods for ContextWgpu.
+//
+
+#include "libANGLE/renderer/wgpu/ContextWgpu.h"
+
+#include "common/debug.h"
+
+#include "libANGLE/Context.h"
+#include "libANGLE/renderer/OverlayImpl.h"
+#include "libANGLE/renderer/wgpu/BufferWgpu.h"
+#include "libANGLE/renderer/wgpu/CompilerWgpu.h"
+#include "libANGLE/renderer/wgpu/DisplayWgpu.h"
+#include "libANGLE/renderer/wgpu/FenceNVWgpu.h"
+#include "libANGLE/renderer/wgpu/FramebufferWgpu.h"
+#include "libANGLE/renderer/wgpu/ImageWgpu.h"
+#include "libANGLE/renderer/wgpu/ProgramExecutableWgpu.h"
+#include "libANGLE/renderer/wgpu/ProgramPipelineWgpu.h"
+#include "libANGLE/renderer/wgpu/ProgramWgpu.h"
+#include "libANGLE/renderer/wgpu/QueryWgpu.h"
+#include "libANGLE/renderer/wgpu/RenderbufferWgpu.h"
+#include "libANGLE/renderer/wgpu/SamplerWgpu.h"
+#include "libANGLE/renderer/wgpu/ShaderWgpu.h"
+#include "libANGLE/renderer/wgpu/SyncWgpu.h"
+#include "libANGLE/renderer/wgpu/TextureWgpu.h"
+#include "libANGLE/renderer/wgpu/TransformFeedbackWgpu.h"
+#include "libANGLE/renderer/wgpu/VertexArrayWgpu.h"
+#include "libANGLE/renderer/wgpu/wgpu_utils.h"
+
+namespace rx
+{
+
+namespace
+{
+
+constexpr angle::PackedEnumMap<webgpu::RenderPassClosureReason, const char *>
+    kRenderPassClosureReason = {{
+        {webgpu::RenderPassClosureReason::NewRenderPass,
+         "Render pass closed due to starting a new render pass"},
+    }};
+
+}  // namespace
+
+ContextWgpu::ContextWgpu(const gl::State &state, gl::ErrorSet *errorSet, DisplayWgpu *display)
+    : ContextImpl(state, errorSet), mDisplay(display)
+{
+    mExtensions                               = gl::Extensions();
+    mExtensions.blendEquationAdvancedKHR      = true;
+    mExtensions.blendFuncExtendedEXT          = true;
+    mExtensions.copyCompressedTextureCHROMIUM = true;
+    mExtensions.copyTextureCHROMIUM           = true;
+    mExtensions.debugMarkerEXT                = true;
+    mExtensions.drawBuffersIndexedOES         = true;
+    mExtensions.fenceNV                       = true;
+    mExtensions.framebufferBlitANGLE          = true;
+    mExtensions.framebufferBlitNV             = true;
+    mExtensions.instancedArraysANGLE          = true;
+    mExtensions.instancedArraysEXT            = true;
+    mExtensions.mapBufferRangeEXT             = true;
+    mExtensions.mapbufferOES                  = true;
+    mExtensions.pixelBufferObjectNV           = true;
+    mExtensions.shaderPixelLocalStorageANGLE  = state.getClientVersion() >= gl::Version(3, 0);
+    mExtensions.shaderPixelLocalStorageCoherentANGLE = mExtensions.shaderPixelLocalStorageANGLE;
+    mExtensions.textureRectangleANGLE                = true;
+    mExtensions.textureUsageANGLE                    = true;
+    mExtensions.translatedShaderSourceANGLE          = true;
+    mExtensions.vertexArrayObjectOES                 = true;
+
+    mExtensions.textureStorageEXT               = true;
+    mExtensions.rgb8Rgba8OES                    = true;
+    mExtensions.textureCompressionDxt1EXT       = true;
+    mExtensions.textureCompressionDxt3ANGLE     = true;
+    mExtensions.textureCompressionDxt5ANGLE     = true;
+    mExtensions.textureCompressionS3tcSrgbEXT   = true;
+    mExtensions.textureCompressionAstcHdrKHR    = true;
+    mExtensions.textureCompressionAstcLdrKHR    = true;
+    mExtensions.textureCompressionAstcOES       = true;
+    mExtensions.compressedETC1RGB8TextureOES    = true;
+    mExtensions.compressedETC1RGB8SubTextureEXT = true;
+    mExtensions.lossyEtcDecodeANGLE             = true;
+    mExtensions.geometryShaderEXT               = true;
+    mExtensions.geometryShaderOES               = true;
+    mExtensions.multiDrawIndirectEXT            = true;
+
+    mExtensions.EGLImageOES                 = true;
+    mExtensions.EGLImageExternalOES         = true;
+    mExtensions.EGLImageExternalEssl3OES    = true;
+    mExtensions.EGLImageArrayEXT            = true;
+    mExtensions.EGLStreamConsumerExternalNV = true;
+
+    const gl::Version maxClientVersion(3, 1);
+    mCaps = GenerateMinimumCaps(maxClientVersion, mExtensions);
+
+    InitMinimumTextureCapsMap(maxClientVersion, mExtensions, &mTextureCaps);
+
+    webgpu::EnsureCapsInitialized(mDisplay->getDevice(), &mCaps);
+
+    if (mExtensions.shaderPixelLocalStorageANGLE)
+    {
+        mPLSOptions.type             = ShPixelLocalStorageType::FramebufferFetch;
+        mPLSOptions.fragmentSyncType = ShFragmentSynchronizationType::Automatic;
+    }
+}
+
+ContextWgpu::~ContextWgpu() {}
+
+void ContextWgpu::onDestroy(const gl::Context *context)
+{
+    mImageLoadContext = {};
+}
+
+angle::Result ContextWgpu::initialize(const angle::ImageLoadContext &imageLoadContext)
+{
+    mImageLoadContext = imageLoadContext;
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::flush(const gl::Context *context)
+{
+    return angle::Result::Continue;
+}
+
+void ContextWgpu::setColorAttachmentFormat(size_t colorIndex, wgpu::TextureFormat format)
+{
+    if (mRenderPipelineDesc.setColorAttachmentFormat(colorIndex, format))
+    {
+        invalidateCurrentRenderPipeline();
+    }
+}
+
+void ContextWgpu::setColorAttachmentFormats(
+    const gl::DrawBuffersArray<wgpu::TextureFormat> &formats)
+{
+    for (size_t i = 0; i < formats.size(); i++)
+    {
+        setColorAttachmentFormat(i, formats[i]);
+    }
+}
+
+void ContextWgpu::setDepthStencilFormat(wgpu::TextureFormat format)
+{
+    if (mRenderPipelineDesc.setDepthStencilAttachmentFormat(format))
+    {
+        invalidateCurrentRenderPipeline();
+    }
+}
+
+angle::Result ContextWgpu::finish(const gl::Context *context)
+{
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::drawArrays(const gl::Context *context,
+                                      gl::PrimitiveMode mode,
+                                      GLint first,
+                                      GLsizei count)
+{
+    if (mode == gl::PrimitiveMode::LineLoop)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+    else if (mode == gl::PrimitiveMode::TriangleFan)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+
+    ANGLE_TRY(
+        setupDraw(context, mode, first, count, 1, gl::DrawElementsType::InvalidEnum, nullptr));
+    // TODO: draw
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::drawArraysInstanced(const gl::Context *context,
+                                               gl::PrimitiveMode mode,
+                                               GLint first,
+                                               GLsizei count,
+                                               GLsizei instanceCount)
+{
+    if (mode == gl::PrimitiveMode::LineLoop)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+    else if (mode == gl::PrimitiveMode::TriangleFan)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+
+    ANGLE_TRY(setupDraw(context, mode, first, count, instanceCount,
+                        gl::DrawElementsType::InvalidEnum, nullptr));
+    // TODO: draw
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::drawArraysInstancedBaseInstance(const gl::Context *context,
+                                                           gl::PrimitiveMode mode,
+                                                           GLint first,
+                                                           GLsizei count,
+                                                           GLsizei instanceCount,
+                                                           GLuint baseInstance)
+{
+    if (mode == gl::PrimitiveMode::LineLoop)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+    else if (mode == gl::PrimitiveMode::TriangleFan)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+
+    ANGLE_TRY(setupDraw(context, mode, first, count, instanceCount,
+                        gl::DrawElementsType::InvalidEnum, nullptr));
+    // TODO: draw
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::drawElements(const gl::Context *context,
+                                        gl::PrimitiveMode mode,
+                                        GLsizei count,
+                                        gl::DrawElementsType type,
+                                        const void *indices)
+{
+    if (mode == gl::PrimitiveMode::LineLoop)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+    else if (mode == gl::PrimitiveMode::TriangleFan)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+
+    ANGLE_TRY(setupIndexedDraw(context, mode, count, 1, type, indices));
+    // TODO: draw
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::drawElementsBaseVertex(const gl::Context *context,
+                                                  gl::PrimitiveMode mode,
+                                                  GLsizei count,
+                                                  gl::DrawElementsType type,
+                                                  const void *indices,
+                                                  GLint baseVertex)
+{
+    if (mode == gl::PrimitiveMode::LineLoop)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+    else if (mode == gl::PrimitiveMode::TriangleFan)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+
+    ANGLE_TRY(setupIndexedDraw(context, mode, count, 1, type, indices));
+    // TODO: draw
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::drawElementsInstanced(const gl::Context *context,
+                                                 gl::PrimitiveMode mode,
+                                                 GLsizei count,
+                                                 gl::DrawElementsType type,
+                                                 const void *indices,
+                                                 GLsizei instances)
+{
+    if (mode == gl::PrimitiveMode::LineLoop)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+    else if (mode == gl::PrimitiveMode::TriangleFan)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+
+    ANGLE_TRY(setupIndexedDraw(context, mode, count, instances, type, indices));
+    // TODO: draw
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::drawElementsInstancedBaseVertex(const gl::Context *context,
+                                                           gl::PrimitiveMode mode,
+                                                           GLsizei count,
+                                                           gl::DrawElementsType type,
+                                                           const void *indices,
+                                                           GLsizei instances,
+                                                           GLint baseVertex)
+{
+    if (mode == gl::PrimitiveMode::LineLoop)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+    else if (mode == gl::PrimitiveMode::TriangleFan)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+
+    ANGLE_TRY(setupIndexedDraw(context, mode, count, instances, type, indices));
+    // TODO: draw
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::drawElementsInstancedBaseVertexBaseInstance(const gl::Context *context,
+                                                                       gl::PrimitiveMode mode,
+                                                                       GLsizei count,
+                                                                       gl::DrawElementsType type,
+                                                                       const void *indices,
+                                                                       GLsizei instances,
+                                                                       GLint baseVertex,
+                                                                       GLuint baseInstance)
+{
+    if (mode == gl::PrimitiveMode::LineLoop)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+    else if (mode == gl::PrimitiveMode::TriangleFan)
+    {
+        UNIMPLEMENTED();
+        return angle::Result::Continue;
+    }
+
+    ANGLE_TRY(setupIndexedDraw(context, mode, count, instances, type, indices));
+    // TODO: draw
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::drawRangeElements(const gl::Context *context,
+                                             gl::PrimitiveMode mode,
+                                             GLuint start,
+                                             GLuint end,
+                                             GLsizei count,
+                                             gl::DrawElementsType type,
+                                             const void *indices)
+{
+    return drawElements(context, mode, count, type, indices);
+}
+
+angle::Result ContextWgpu::drawRangeElementsBaseVertex(const gl::Context *context,
+                                                       gl::PrimitiveMode mode,
+                                                       GLuint start,
+                                                       GLuint end,
+                                                       GLsizei count,
+                                                       gl::DrawElementsType type,
+                                                       const void *indices,
+                                                       GLint baseVertex)
+{
+    return drawElementsBaseVertex(context, mode, count, type, indices, baseVertex);
+}
+
+angle::Result ContextWgpu::drawArraysIndirect(const gl::Context *context,
+                                              gl::PrimitiveMode mode,
+                                              const void *indirect)
+{
+    UNIMPLEMENTED();
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::drawElementsIndirect(const gl::Context *context,
+                                                gl::PrimitiveMode mode,
+                                                gl::DrawElementsType type,
+                                                const void *indirect)
+{
+    UNIMPLEMENTED();
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::multiDrawArrays(const gl::Context *context,
+                                           gl::PrimitiveMode mode,
+                                           const GLint *firsts,
+                                           const GLsizei *counts,
+                                           GLsizei drawcount)
+{
+    UNIMPLEMENTED();
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::multiDrawArraysInstanced(const gl::Context *context,
+                                                    gl::PrimitiveMode mode,
+                                                    const GLint *firsts,
+                                                    const GLsizei *counts,
+                                                    const GLsizei *instanceCounts,
+                                                    GLsizei drawcount)
+{
+    UNIMPLEMENTED();
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::multiDrawArraysIndirect(const gl::Context *context,
+                                                   gl::PrimitiveMode mode,
+                                                   const void *indirect,
+                                                   GLsizei drawcount,
+                                                   GLsizei stride)
+{
+    UNIMPLEMENTED();
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::multiDrawElements(const gl::Context *context,
+                                             gl::PrimitiveMode mode,
+                                             const GLsizei *counts,
+                                             gl::DrawElementsType type,
+                                             const GLvoid *const *indices,
+                                             GLsizei drawcount)
+{
+    UNIMPLEMENTED();
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::multiDrawElementsInstanced(const gl::Context *context,
+                                                      gl::PrimitiveMode mode,
+                                                      const GLsizei *counts,
+                                                      gl::DrawElementsType type,
+                                                      const GLvoid *const *indices,
+                                                      const GLsizei *instanceCounts,
+                                                      GLsizei drawcount)
+{
+    UNIMPLEMENTED();
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::multiDrawElementsIndirect(const gl::Context *context,
+                                                     gl::PrimitiveMode mode,
+                                                     gl::DrawElementsType type,
+                                                     const void *indirect,
+                                                     GLsizei drawcount,
+                                                     GLsizei stride)
+{
+    UNIMPLEMENTED();
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::multiDrawArraysInstancedBaseInstance(const gl::Context *context,
+                                                                gl::PrimitiveMode mode,
+                                                                const GLint *firsts,
+                                                                const GLsizei *counts,
+                                                                const GLsizei *instanceCounts,
+                                                                const GLuint *baseInstances,
+                                                                GLsizei drawcount)
+{
+    UNIMPLEMENTED();
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::multiDrawElementsInstancedBaseVertexBaseInstance(
+    const gl::Context *context,
+    gl::PrimitiveMode mode,
+    const GLsizei *counts,
+    gl::DrawElementsType type,
+    const GLvoid *const *indices,
+    const GLsizei *instanceCounts,
+    const GLint *baseVertices,
+    const GLuint *baseInstances,
+    GLsizei drawcount)
+{
+    UNIMPLEMENTED();
+    return angle::Result::Continue;
+}
+
+gl::GraphicsResetStatus ContextWgpu::getResetStatus()
+{
+    return gl::GraphicsResetStatus::NoError;
+}
+
+angle::Result ContextWgpu::insertEventMarker(GLsizei length, const char *marker)
+{
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::pushGroupMarker(GLsizei length, const char *marker)
+{
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::popGroupMarker()
+{
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::pushDebugGroup(const gl::Context *context,
+                                          GLenum source,
+                                          GLuint id,
+                                          const std::string &message)
+{
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::popDebugGroup(const gl::Context *context)
+{
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::syncState(const gl::Context *context,
+                                     const gl::state::DirtyBits dirtyBits,
+                                     const gl::state::DirtyBits bitMask,
+                                     const gl::state::ExtendedDirtyBits extendedDirtyBits,
+                                     const gl::state::ExtendedDirtyBits extendedBitMask,
+                                     gl::Command command)
+{
+    const gl::State &glState = context->getState();
+
+    for (auto iter = dirtyBits.begin(), endIter = dirtyBits.end(); iter != endIter; ++iter)
+    {
+        size_t dirtyBit = *iter;
+        switch (dirtyBit)
+        {
+            case gl::state::DIRTY_BIT_DRAW_FRAMEBUFFER_BINDING:
+            {
+                const FramebufferWgpu *framebufferWgpu =
+                    webgpu::GetImpl(context->getState().getDrawFramebuffer());
+                setColorAttachmentFormats(framebufferWgpu->getCurrentColorAttachmentFormats());
+                setDepthStencilFormat(framebufferWgpu->getCurrentDepthStencilAttachmentFormat());
+            }
+            break;
+            case gl::state::DIRTY_BIT_READ_FRAMEBUFFER_BINDING:
+                break;
+            case gl::state::DIRTY_BIT_SCISSOR_TEST_ENABLED:
+                break;
+            case gl::state::DIRTY_BIT_SCISSOR:
+                break;
+            case gl::state::DIRTY_BIT_VIEWPORT:
+                break;
+            case gl::state::DIRTY_BIT_DEPTH_RANGE:
+                break;
+            case gl::state::DIRTY_BIT_BLEND_ENABLED:
+                break;
+            case gl::state::DIRTY_BIT_BLEND_COLOR:
+                break;
+            case gl::state::DIRTY_BIT_BLEND_FUNCS:
+                break;
+            case gl::state::DIRTY_BIT_BLEND_EQUATIONS:
+                break;
+            case gl::state::DIRTY_BIT_COLOR_MASK:
+                break;
+            case gl::state::DIRTY_BIT_SAMPLE_ALPHA_TO_COVERAGE_ENABLED:
+                break;
+            case gl::state::DIRTY_BIT_SAMPLE_COVERAGE_ENABLED:
+                break;
+            case gl::state::DIRTY_BIT_SAMPLE_COVERAGE:
+                break;
+            case gl::state::DIRTY_BIT_SAMPLE_MASK_ENABLED:
+                break;
+            case gl::state::DIRTY_BIT_SAMPLE_MASK:
+                break;
+            case gl::state::DIRTY_BIT_DEPTH_TEST_ENABLED:
+                break;
+            case gl::state::DIRTY_BIT_DEPTH_FUNC:
+                break;
+            case gl::state::DIRTY_BIT_DEPTH_MASK:
+                break;
+            case gl::state::DIRTY_BIT_STENCIL_TEST_ENABLED:
+                break;
+            case gl::state::DIRTY_BIT_STENCIL_FUNCS_FRONT:
+                break;
+            case gl::state::DIRTY_BIT_STENCIL_FUNCS_BACK:
+                break;
+            case gl::state::DIRTY_BIT_STENCIL_OPS_FRONT:
+                break;
+            case gl::state::DIRTY_BIT_STENCIL_OPS_BACK:
+                break;
+            case gl::state::DIRTY_BIT_STENCIL_WRITEMASK_FRONT:
+                break;
+            case gl::state::DIRTY_BIT_STENCIL_WRITEMASK_BACK:
+                break;
+            case gl::state::DIRTY_BIT_CULL_FACE_ENABLED:
+            case gl::state::DIRTY_BIT_CULL_FACE:
+                mRenderPipelineDesc.setCullMode(glState.getRasterizerState().cullMode,
+                                                glState.getRasterizerState().cullFace);
+                invalidateCurrentRenderPipeline();
+                break;
+            case gl::state::DIRTY_BIT_FRONT_FACE:
+                mRenderPipelineDesc.setFrontFace(glState.getRasterizerState().frontFace);
+                invalidateCurrentRenderPipeline();
+                break;
+            case gl::state::DIRTY_BIT_POLYGON_OFFSET_FILL_ENABLED:
+                break;
+            case gl::state::DIRTY_BIT_POLYGON_OFFSET:
+                break;
+            case gl::state::DIRTY_BIT_RASTERIZER_DISCARD_ENABLED:
+                break;
+            case gl::state::DIRTY_BIT_LINE_WIDTH:
+                break;
+            case gl::state::DIRTY_BIT_PRIMITIVE_RESTART_ENABLED:
+                break;
+            case gl::state::DIRTY_BIT_CLEAR_COLOR:
+                break;
+            case gl::state::DIRTY_BIT_CLEAR_DEPTH:
+                break;
+            case gl::state::DIRTY_BIT_CLEAR_STENCIL:
+                break;
+            case gl::state::DIRTY_BIT_UNPACK_STATE:
+                break;
+            case gl::state::DIRTY_BIT_UNPACK_BUFFER_BINDING:
+                break;
+            case gl::state::DIRTY_BIT_PACK_STATE:
+                break;
+            case gl::state::DIRTY_BIT_PACK_BUFFER_BINDING:
+                break;
+            case gl::state::DIRTY_BIT_DITHER_ENABLED:
+                break;
+            case gl::state::DIRTY_BIT_RENDERBUFFER_BINDING:
+                break;
+            case gl::state::DIRTY_BIT_VERTEX_ARRAY_BINDING:
+                break;
+            case gl::state::DIRTY_BIT_DRAW_INDIRECT_BUFFER_BINDING:
+                break;
+            case gl::state::DIRTY_BIT_DISPATCH_INDIRECT_BUFFER_BINDING:
+                break;
+            case gl::state::DIRTY_BIT_PROGRAM_BINDING:
+            case gl::state::DIRTY_BIT_PROGRAM_EXECUTABLE:
+                invalidateCurrentRenderPipeline();
+                break;
+            case gl::state::DIRTY_BIT_SAMPLER_BINDINGS:
+                break;
+            case gl::state::DIRTY_BIT_TEXTURE_BINDINGS:
+                break;
+            case gl::state::DIRTY_BIT_IMAGE_BINDINGS:
+                break;
+            case gl::state::DIRTY_BIT_TRANSFORM_FEEDBACK_BINDING:
+                break;
+            case gl::state::DIRTY_BIT_UNIFORM_BUFFER_BINDINGS:
+                break;
+            case gl::state::DIRTY_BIT_SHADER_STORAGE_BUFFER_BINDING:
+                break;
+            case gl::state::DIRTY_BIT_ATOMIC_COUNTER_BUFFER_BINDING:
+                break;
+            case gl::state::DIRTY_BIT_MULTISAMPLING:
+                break;
+            case gl::state::DIRTY_BIT_SAMPLE_ALPHA_TO_ONE:
+                break;
+            case gl::state::DIRTY_BIT_COVERAGE_MODULATION:
+                break;
+            case gl::state::DIRTY_BIT_FRAMEBUFFER_SRGB_WRITE_CONTROL_MODE:
+                break;
+            case gl::state::DIRTY_BIT_CURRENT_VALUES:
+                break;
+            case gl::state::DIRTY_BIT_PROVOKING_VERTEX:
+                break;
+            case gl::state::DIRTY_BIT_SAMPLE_SHADING:
+                break;
+            case gl::state::DIRTY_BIT_PATCH_VERTICES:
+                break;
+            case gl::state::DIRTY_BIT_EXTENDED:
+            {
+                for (auto extendedIter    = extendedDirtyBits.begin(),
+                          extendedEndIter = extendedDirtyBits.end();
+                     extendedIter != extendedEndIter; ++extendedIter)
+                {
+                    const size_t extendedDirtyBit = *extendedIter;
+                    switch (extendedDirtyBit)
+                    {
+                        case gl::state::EXTENDED_DIRTY_BIT_CLIP_CONTROL:
+                            break;
+                        case gl::state::EXTENDED_DIRTY_BIT_CLIP_DISTANCES:
+                            break;
+                        case gl::state::EXTENDED_DIRTY_BIT_DEPTH_CLAMP_ENABLED:
+                            break;
+                        case gl::state::EXTENDED_DIRTY_BIT_MIPMAP_GENERATION_HINT:
+                            break;
+                        case gl::state::EXTENDED_DIRTY_BIT_POLYGON_MODE:
+                            break;
+                        case gl::state::EXTENDED_DIRTY_BIT_POLYGON_OFFSET_POINT_ENABLED:
+                            break;
+                        case gl::state::EXTENDED_DIRTY_BIT_POLYGON_OFFSET_LINE_ENABLED:
+                            break;
+                        case gl::state::EXTENDED_DIRTY_BIT_SHADER_DERIVATIVE_HINT:
+                            break;
+                        case gl::state::EXTENDED_DIRTY_BIT_SHADING_RATE:
+                            break;
+                        case gl::state::EXTENDED_DIRTY_BIT_LOGIC_OP_ENABLED:
+                            break;
+                        case gl::state::EXTENDED_DIRTY_BIT_LOGIC_OP:
+                            break;
+                        case gl::state::EXTENDED_DIRTY_BIT_BLEND_ADVANCED_COHERENT:
+                            break;
+                        default:
+                            UNREACHABLE();
+                    }
+                }
+            }
+            break;
+
+            default:
+                UNREACHABLE();
+                break;
+        }
+    }
+
+    return angle::Result::Continue;
+}
+
+GLint ContextWgpu::getGPUDisjoint()
+{
+    return 0;
+}
+
+GLint64 ContextWgpu::getTimestamp()
+{
+    return 0;
+}
+
+angle::Result ContextWgpu::onMakeCurrent(const gl::Context *context)
+{
+    return angle::Result::Continue;
+}
+
+gl::Caps ContextWgpu::getNativeCaps() const
+{
+    return mCaps;
+}
+
+const gl::TextureCapsMap &ContextWgpu::getNativeTextureCaps() const
+{
+    return mTextureCaps;
+}
+
+const gl::Extensions &ContextWgpu::getNativeExtensions() const
+{
+    return mExtensions;
+}
+
+const gl::Limitations &ContextWgpu::getNativeLimitations() const
+{
+    return mLimitations;
+}
+
+const ShPixelLocalStorageOptions &ContextWgpu::getNativePixelLocalStorageOptions() const
+{
+    return mPLSOptions;
+}
+
+CompilerImpl *ContextWgpu::createCompiler()
+{
+    return new CompilerWgpu();
+}
+
+ShaderImpl *ContextWgpu::createShader(const gl::ShaderState &data)
+{
+    return new ShaderWgpu(data);
+}
+
+ProgramImpl *ContextWgpu::createProgram(const gl::ProgramState &data)
+{
+    return new ProgramWgpu(data);
+}
+
+ProgramExecutableImpl *ContextWgpu::createProgramExecutable(const gl::ProgramExecutable *executable)
+{
+    return new ProgramExecutableWgpu(executable);
+}
+
+FramebufferImpl *ContextWgpu::createFramebuffer(const gl::FramebufferState &data)
+{
+    return new FramebufferWgpu(data);
+}
+
+TextureImpl *ContextWgpu::createTexture(const gl::TextureState &state)
+{
+    return new TextureWgpu(state);
+}
+
+RenderbufferImpl *ContextWgpu::createRenderbuffer(const gl::RenderbufferState &state)
+{
+    return new RenderbufferWgpu(state);
+}
+
+BufferImpl *ContextWgpu::createBuffer(const gl::BufferState &state)
+{
+    return new BufferWgpu(state);
+}
+
+VertexArrayImpl *ContextWgpu::createVertexArray(const gl::VertexArrayState &data)
+{
+    return new VertexArrayWgpu(data);
+}
+
+QueryImpl *ContextWgpu::createQuery(gl::QueryType type)
+{
+    return new QueryWgpu(type);
+}
+
+FenceNVImpl *ContextWgpu::createFenceNV()
+{
+    return new FenceNVWgpu();
+}
+
+SyncImpl *ContextWgpu::createSync()
+{
+    return new SyncWgpu();
+}
+
+TransformFeedbackImpl *ContextWgpu::createTransformFeedback(const gl::TransformFeedbackState &state)
+{
+    return new TransformFeedbackWgpu(state);
+}
+
+SamplerImpl *ContextWgpu::createSampler(const gl::SamplerState &state)
+{
+    return new SamplerWgpu(state);
+}
+
+ProgramPipelineImpl *ContextWgpu::createProgramPipeline(const gl::ProgramPipelineState &state)
+{
+    return new ProgramPipelineWgpu(state);
+}
+
+MemoryObjectImpl *ContextWgpu::createMemoryObject()
+{
+    UNREACHABLE();
+    return nullptr;
+}
+
+SemaphoreImpl *ContextWgpu::createSemaphore()
+{
+    UNREACHABLE();
+    return nullptr;
+}
+
+OverlayImpl *ContextWgpu::createOverlay(const gl::OverlayState &state)
+{
+    return new OverlayImpl(state);
+}
+
+angle::Result ContextWgpu::dispatchCompute(const gl::Context *context,
+                                           GLuint numGroupsX,
+                                           GLuint numGroupsY,
+                                           GLuint numGroupsZ)
+{
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::dispatchComputeIndirect(const gl::Context *context, GLintptr indirect)
+{
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::memoryBarrier(const gl::Context *context, GLbitfield barriers)
+{
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::memoryBarrierByRegion(const gl::Context *context, GLbitfield barriers)
+{
+    return angle::Result::Continue;
+}
+
+void ContextWgpu::handleError(GLenum errorCode,
+                              const char *message,
+                              const char *file,
+                              const char *function,
+                              unsigned int line)
+{
+    std::stringstream errorStream;
+    errorStream << "Internal Wgpu back-end error: " << message << ".";
+    mErrors->handleError(errorCode, errorStream.str().c_str(), file, function, line);
+}
+
+angle::Result ContextWgpu::startRenderPass(const wgpu::RenderPassDescriptor &desc)
+{
+    mCurrentCommandEncoder = getDevice().CreateCommandEncoder(nullptr);
+    mCurrentRenderPass     = mCurrentCommandEncoder.BeginRenderPass(&desc);
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::endRenderPass(webgpu::RenderPassClosureReason closure_reason)
+{
+    if (!mCurrentRenderPass)
+    {
+        return angle::Result::Continue;
+    }
+    const char *reasonText = kRenderPassClosureReason[closure_reason];
+    INFO() << reasonText;
+    mCurrentRenderPass.End();
+    mCurrentRenderPass = nullptr;
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::flush()
+{
+    wgpu::CommandBuffer command_buffer = mCurrentCommandEncoder.Finish();
+    getQueue().Submit(1, &command_buffer);
+    mCurrentCommandEncoder = nullptr;
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::setupIndexedDraw(const gl::Context *context,
+                                            gl::PrimitiveMode mode,
+                                            GLsizei indexCount,
+                                            GLsizei instanceCount,
+                                            gl::DrawElementsType indexType,
+                                            const void *indices)
+{
+    // TODO: handle index buffer binding
+
+    return setupDraw(context, mode, 0, indexCount, instanceCount, indexType, indices);
+}
+
+angle::Result ContextWgpu::setupDraw(const gl::Context *context,
+                                     gl::PrimitiveMode mode,
+                                     GLint firstVertexOrInvalid,
+                                     GLsizei vertexOrIndexCount,
+                                     GLsizei instanceCount,
+                                     gl::DrawElementsType indexTypeOrInvalid,
+                                     const void *indices)
+{
+    if (mRenderPipelineDesc.setPrimitiveMode(mode, indexTypeOrInvalid))
+    {
+        invalidateCurrentRenderPipeline();
+    }
+
+    if (mDirtyBits.any())
+    {
+        for (DirtyBits::Iterator dirtyBitIter = mDirtyBits.begin();
+             dirtyBitIter != mDirtyBits.end(); ++dirtyBitIter)
+        {
+            size_t dirtyBit = *dirtyBitIter;
+            switch (dirtyBit)
+            {
+                case DIRTY_BIT_RENDER_PIPELINE_DESC:
+                    ANGLE_TRY(createRenderPipeline());
+                    break;
+
+                default:
+                    UNREACHABLE();
+                    break;
+            }
+        }
+
+        mDirtyBits.reset();
+    }
+
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::createRenderPipeline()
+{
+    ASSERT(mState.getProgramExecutable() != nullptr);
+    ProgramExecutableWgpu *executable = webgpu::GetImpl(mState.getProgramExecutable());
+    ASSERT(executable);
+
+    ANGLE_TRY(executable->getRenderPipeline(this, mRenderPipelineDesc, &mCurrentGraphicsPipeline));
+
+    return angle::Result::Continue;
+}
+
+}  // namespace rx
