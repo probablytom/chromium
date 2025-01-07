@@ -1,6 +1,7 @@
 // Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+#if 0
 
 #ifdef UNSAFE_BUFFERS_BUILD
 // TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
@@ -723,3 +724,4 @@ void Zygote::HandleReinitializeLoggingRequest(base::PickleIterator iter,
 }
 
 }  // namespace content
+#endif

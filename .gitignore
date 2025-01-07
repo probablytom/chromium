@@ -1,3 +1,9 @@
+# Tom-added
+CMakeFiles/
+CMakeCache.txt
+Makefile
+
+# original
 /client-py/
 *.bak
 *.code-workspace

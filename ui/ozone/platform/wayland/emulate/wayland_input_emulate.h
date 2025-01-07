@@ -68,7 +68,7 @@ class WaylandInputEmulate : public wl::WaylandProxy::Delegate {
                             uint32_t request_id);
 #endif
 
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_BSD)
   void ForceUseScreenCoordinatesOnce();
 #endif
 

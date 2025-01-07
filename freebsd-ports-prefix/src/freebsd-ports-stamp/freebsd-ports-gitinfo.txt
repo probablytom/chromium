@@ -1,0 +1,15 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=git
+command=/usr/local64/bin/cmake;-P;/home/probablytom/chromium-gh/freebsd-ports-prefix/tmp/freebsd-ports-gitclone.cmake
+source_dir=/home/probablytom/chromium-gh/freebsd-ports
+work_dir=/home/probablytom/chromium-gh
+repository=https://github.com/freebsd/freebsd-ports.git
+remote=origin
+init_submodules=TRUE
+recurse_submodules=--recursive
+submodules=
+CMP0097=NEW
+
