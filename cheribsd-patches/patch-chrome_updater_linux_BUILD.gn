@@ -1,0 +1,30 @@
+--- chrome/updater/linux/BUILD.gn.orig	2025-01-08 11:27:10.054346000 +0000
++++ chrome/updater/linux/BUILD.gn	2025-01-08 11:27:58.345635000 +0000
+@@ -2,7 +2,6 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-import("//build/config/linux/pkg_config.gni")
+ import("//chrome/updater/zip.gni")
+ 
+ # This target builds the updater executable and unittests.
+@@ -13,18 +12,10 @@
+   ]
+ }
+ 
+-pkg_config("libcurl") {
+-  packages = [ "libcurl" ]
+-}
+-
+-pkg_config("libsystemd") {
+-  packages = [ "libsystemd" ]
+-}
+-
+ source_set("updater_executable") {
+   sources = [ "main.cc" ]
+   deps = [ "//chrome/updater:base" ]
+-  public_configs = [ ":libsystemd" ]
++  libs = [ "systemd" ]
+ }
+ 
+ executable("updater") {

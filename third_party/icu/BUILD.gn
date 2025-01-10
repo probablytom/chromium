@@ -1,25 +1,10 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/features.gni")
-import("//build/config/host_byteorder.gni")
-import("config.gni")
-import("sources.gni")
+import("//build/config/linux/pkg_config.gni")
+import("//build/shim_headers.gni")
 
-if (is_android) {
-  import("//build/config/android/rules.gni")
-}
-
-if (is_mac && !icu_is_in_fuchsia) {
-  import("//build/config/sanitizers/sanitizers.gni")
-}
-
-assert(!icu_disable_thin_archive || !is_component_build,
-       "icu_disable_thin_archive only works in static library builds")
-
-# Meta target that includes both icuuc and icui18n. Most targets want both.
-# You can depend on the individually if you need to.
 group("icu") {
   public_deps = [
     ":icui18n",
@@ -27,550 +12,256 @@ group("icu") {
   ]
 }
 
-# Allow access to normalization test data from unit/integration tests.
-copy("normalization_test") {
-  testonly = true
-  sources = [ "source/data/unidata/NormalizationTest.txt" ]
-  outputs = [ "$root_out_dir/testdata/{{source_file_part}}" ]
-}
-
-# Shared config used by ICU and all dependents.
 config("icu_config") {
   defines = [
-    # Tell ICU to not insert |using namespace icu;| into its headers,
-    # so that chrome's source explicitly has to use |icu::|.
-    "U_USING_ICU_NAMESPACE=0",
+    "USING_SYSTEM_ICU=1",
+    "ICU_UTIL_DATA_IMPL=ICU_UTIL_DATA_STATIC",
 
-    # We don't use ICU plugins and dyload is only necessary for them.
-    # NaCl-related builds also fail looking for dlfcn.h when it's enabled.
-    "U_ENABLE_DYLOAD=0",
+    # As of icu 73 C++ nullptr, char16_t, override, final and noexcept are used
+    # instead of defines. These definitions can be removed when the bundled icu
+    # gets updated to 73. For more details, see:
+    # https://unicode-org.atlassian.net/browse/ICU-21833 and
+    # https://github.com/unicode-org/icu/commit/28643799377ecf654564f6f31854b02788cebe33
+    "U_FINAL=final",
+    "U_NOEXCEPT=noexcept",
+    "U_OVERRIDE=override",
 
-    # v8/Blink need to know whether Chromium's copy of ICU is used or not.
-    "USE_CHROMIUM_ICU=1",
-
-    # Enable tracing to connect to UMA but disable tracing of resource
-    # to avoid performance issues.
-    "U_ENABLE_TRACING=1",
-    "U_ENABLE_RESOURCE_TRACING=0",
-  ]
-
-  if (!is_component_build) {
-    defines += [ "U_STATIC_IMPLEMENTATION" ]
-  }
-
-  include_dirs = [
-    "source/common",
-    "source/i18n",
-  ]
-
-  if (icu_use_data_file) {
-    defines += [ "ICU_UTIL_DATA_IMPL=ICU_UTIL_DATA_FILE" ]
-  } else {
-    defines += [ "ICU_UTIL_DATA_IMPL=ICU_UTIL_DATA_STATIC" ]
-  }
-}
-
-# Config used only by ICU code.
-config("icu_code") {
-  cflags = []
-  defines = [
-    "HAVE_DLOPEN=0",
-
-    # Only build encoding coverters and detectors necessary for HTML5.
-    "UCONFIG_ONLY_HTML_CONVERSION=1",
-
-    "UCONFIG_USE_ML_PHRASE_BREAKING=1",
-
-    # TODO(jshin): do we still need this?
-    "UCONFIG_USE_WINDOWS_LCID_MAPPING_API=0",
-
-    # No dependency on the default platform encoding.
-    # Will cut down the code size.
-    "U_CHARSET_IS_UTF8=1",
-  ]
-
-  if (is_win) {
-    # Disable some compiler warnings.
-    cflags += [
-      "/wd4005",  # Macro redefinition.
-      "/wd4068",  # Unknown pragmas.
-      "/wd4267",  # Conversion from size_t on 64-bits.
-      "/utf-8",  # ICU source files are in UTF-8.
-    ]
-    if (!is_clang) {
-      cflags += [
-        # Ignore some msvc warnings here because V8 still supports msvc.
-        "/wd4244",  # Conversion: possible loss of data.
-      ]
-      defines += [
-        # https://crbug.com/1274247
-        # <ctgmath> is deprecated in C++17, but ICU still uses it, so we should
-        # silence the warning for now.
-        "_SILENCE_CXX17_C_HEADER_DEPRECATION_WARNING",
-      ]
-    }
-  } else if (is_linux || is_chromeos || is_android || icu_is_in_fuchsia) {
-    cflags += [ "-Wno-unused-function" ]
-  }
-  if (is_clang) {
-    cflags += [
-      # ICU has some code with the pattern:
-      #   if (found = uprv_getWindowsTimeZoneInfo(...))
-      "-Wno-parentheses",
-
-      # ucnv2022.cpp contains three functions that are only used when
-      # certain preprocessor defines are set.
-      # unistr.cpp also has an unused function for non-component builds.
-      "-Wno-unused-function",
-
-      # putil.cpp contains unused variables when building for iOS simulators.
-      "-Wno-unused-variable",
-
-      # ICU has decided not to fix this warning as doing so would break its
-      # stable API.
-      "-Wno-ambiguous-reversed-operator",
-    ]
-  }
-  if (is_clang || is_linux || is_chromeos || is_android || icu_is_in_fuchsia) {
-    cflags += [
-      # ICU uses its own deprecated functions.
-      "-Wno-deprecated-declarations",
-    ]
-  }
-  if (icu_is_in_fuchsia) {
-    cflags += [
-      # Disable spurious thread safety errors in umutex.cpp
-      "-Wno-thread-safety",
-
-      # Can probably remove the below after
-      # https://unicode-org.atlassian.net/projects/ICU/issues/ICU-20869
-      # is fixed.
-      "-Wno-implicit-int-float-conversion",
-      "-Wno-conversion",
-
-      # Needed for C++20
-      "-Wno-ambiguous-reversed-operator",
-      "-Wno-rewrite-not-bool",
-      "-Wno-deprecated-anon-enum-enum-conversion",
-      "-Wno-deprecated-array-compare",
-      "-Wno-deprecated-pragma",
-
-      # Used for conditional changes to the compilation process that
-      # are only needed for the Fuchsia toolchain.
-      "-DICU_IS_IN_FUCHSIA",
-
-      # Fuchsia's default compilation config makes
-      # no-newline-after-eof an error. While in ICU it
-      # probably does not matter. So we instruct Fuchsia
-      # to lower its standards when compiling ICU.
-      "-Wno-newline-eof",
-    ] + icu_fuchsia_extra_compile_flags
-  }
-  if (current_cpu == "wasm") {
-    # Tell ICU that we are a 32 bit platform, otherwise,
-    # double-conversion-utils.h doesn't know how to operate.
-    defines += [ "__i386__" ]
-  }
-}
-
-# Config used to set default visibility to hidden.
-config("visibility_hidden") {
-  cflags = []
-  if (is_mac || is_linux || is_chromeos || is_android || is_fuchsia) {
-    cflags += [ "-fvisibility=hidden" ]
-  }
-}
-
-template("generate_icu_component") {
-  if (icu_is_in_fuchsia) {
-    target(default_library_type, target_name) {
-      forward_variables_from(invoker,
-                             "*",
-                             [
-                               "testonly",
-                               "visibility",
-                             ])
-      assert(fuchsia_output_name_postfix == "")
-
-      # If icu_use_target_out_dir is defined and set, then the component
-      # will be output in the regular target_out_dir, rather than the default
-      # root_build_dir.
-      # See README.fuchsia for details.
-      if (defined(icu_use_target_out_dir) && icu_use_target_out_dir) {
-        output_dir = target_out_dir
-      }
-
-      # ICU uses RTTI, replace the default "no rtti" config (if applied).
-      configs += [
-        "//build/config:no_rtti",
-        "//build/config:symbol_visibility_hidden",
-      ]
-      configs -= [
-        "//build/config:no_rtti",
-        "//build/config:symbol_visibility_hidden",
-      ]
-
-      configs += [ "//build/config:rtti" ]
-
-      # These need to be applied after the main configs so the "-Wno-*" options
-      # take effect.
-      configs += [ ":icu_code" ]
-      configs += extra_configs
-      # Add Fuchsia-specific configs
-      configs += icu_fuchsia_extra_configs
-      # Remove Fuchsia-specific configs, the "add-then-remove" ensures that
-      # removing a config that is not there does not fail.
-      configs += icu_fuchsia_remove_configs
-      configs -= icu_fuchsia_remove_configs
-      public_configs = [ ":icu_config" ]
-    }
-  } else {
-    component(target_name) {
-      forward_variables_from(invoker,
-                             "*",
-                             [
-                               "testonly",
-                               "visibility",
-                             ])
-
-      # If icu_use_target_output_dir is defined and set, then the component
-      # will be output in the regular target_out_dir, rather than the default
-      # root_build_dir.
-      # See README.fuchsia for details.
-      if (defined(icu_use_target_output_dir) && icu_use_target_output_dir) {
-        output_dir = target_out_dir
-      }
-
-      if (is_fuchsia) {
-        base_output_name = target_name
-        if (defined(invoker.output_name)) {
-          base_output_name = invoker.output_name
-        }
-
-        # Fuchsia puts its own libicu*.so in /system/lib where we need to put our
-        # .so when doing component builds, so we need to give this a different name.
-        output_name = "${base_output_name}_cr${fuchsia_output_name_postfix}"
-      } else {
-        assert(fuchsia_output_name_postfix == "")
-      }
-
-      # ICU uses RTTI, replace the default "no rtti" config (if applied).
-      configs += [
-        "//build/config/compiler:no_rtti",
-        "//build/config/compiler:chromium_code",
-      ]
-      configs -= [
-        "//build/config/compiler:no_rtti",
-        "//build/config/compiler:chromium_code",
-      ]
-      configs += [
-        "//build/config/compiler:rtti",
-        "//build/config/compiler:no_chromium_code",
-      ]
-
-      # These need to be applied after the main configs so the "-Wno-*" options
-      # take effect.
-      configs += [ ":icu_code" ]
-      configs += extra_configs
-      # See a similar stanza above for details.
-      configs += icu_fuchsia_extra_configs
-      configs += icu_fuchsia_remove_configs
-      configs -= icu_fuchsia_remove_configs
-      public_configs = [ ":icu_config" ]
-
-      # Make icu into a standalone static library. Currently This is only useful
-      # on Chrome OS.
-      if (icu_disable_thin_archive) {
-        configs -= [ "//build/config/compiler:thin_archive" ]
-        complete_static_lib = true
-      }
-    }
-  }
-}
-
-template("generate_icui18n") {
-  generate_icu_component(target_name) {
-    assert(defined(invoker.icuuc_deps), "Need the 'icuuc_deps' parameter.")
-    icuuc_deps = invoker.icuuc_deps
-
-    fuchsia_output_name_postfix = ""
-    if (defined(invoker.fuchsia_output_name_postfix)) {
-      fuchsia_output_name_postfix = invoker.fuchsia_output_name_postfix
-    }
-
-    forward_variables_from(invoker,
-                           "*",
-                           [
-                             "testonly",
-                             "visibility",
-                           ])
-
-    sources = icu18n_sources
-    public = icu18n_public
-
-    defines = [ "U_I18N_IMPLEMENTATION" ]
-    deps = icuuc_deps
-
-    # TODO(fxbug.dev/42180987): workaround for toolchain issues, see bug
-    if (icu_is_in_fuchsia && is_fuchsia) {
-      deps += [ "//build/config/fuchsia:uses-outline-atomics-fxbug98632" ]
-    }
-  }
-}
-
-generate_icui18n("icui18n") {
-  extra_configs = []
-  if (icu_is_in_fuchsia) {
-      # See similar stanza above for details.
-      extra_configs += icu_fuchsia_extra_configs
-      extra_configs += icu_fuchsia_remove_configs
-      extra_configs -= icu_fuchsia_remove_configs
-  }
-  icuuc_deps = [ ":icuuc_private" ]
-}
-
-generate_icui18n("icui18n_hidden_visibility") {
-  extra_configs = [ ":visibility_hidden" ]
-  if (icu_is_in_fuchsia) {
-      # See similar stanza above for details.
-      extra_configs += icu_fuchsia_extra_configs
-      extra_configs += icu_fuchsia_remove_configs
-      extra_configs -= icu_fuchsia_remove_configs
-  }
-  icuuc_deps = [ ":icuuc_private_hidden_visibility" ]
-  if (is_fuchsia && !icu_is_in_fuchsia) {
-    fuchsia_output_name_postfix = "_hidden_visibility"
-  }
-}
-
-template("generate_icuuc") {
-  generate_icu_component(target_name) {
-    fuchsia_output_name_postfix = ""
-    if (defined(invoker.fuchsia_output_name_postfix)) {
-      fuchsia_output_name_postfix = invoker.fuchsia_output_name_postfix
-    }
-
-    forward_variables_from(invoker,
-                           "*",
-                           [
-                             "testonly",
-                             "visibility",
-                           ])
-
-    sources = icuuc_sources
-    public_deps = [ ":icuuc_public" ]
-
-    defines = [ "U_COMMON_IMPLEMENTATION" ]
-    deps = [ ":icudata" ]
-
-    if (is_chromeos) {
-      deps += [ ":icudata_hash" ]
-    }
-
-    if (icu_use_data_file && icu_use_stub_data) {
-      sources += [ "source/stubdata/stubdata.cpp" ]
-    }
-
-    defines += [ "U_ICUDATAENTRY_IN_COMMON" ]
-
-    # TODO(fxbug.dev/42180987): workaround for toolchain issues, see bug
-    if (icu_is_in_fuchsia && is_fuchsia) {
-      deps += [ "//build/config/fuchsia:uses-outline-atomics-fxbug98632" ]
-    }
-  }
-}
-
-group("icuuc") {
-  public_deps = [ ":icuuc_private" ]
-}
-
-group("icuuc_hidden_visibility") {
-  public_deps = [ ":icuuc_private_hidden_visibility" ]
-}
-
-source_set("icuuc_public") {
-  sources = icuuc_public
-}
-
-generate_icuuc("icuuc_private") {
-  extra_configs = []
-  if (icu_is_in_fuchsia) {
-      # See similar stanza above for details.
-      extra_configs += icu_fuchsia_extra_configs
-      extra_configs += icu_fuchsia_remove_configs
-      extra_configs -= icu_fuchsia_remove_configs
-  }
-  output_name = "icuuc"
-  visibility = [
-    ":icui18n",
-    ":icuuc",
+    # U_EXPORT (defined in unicode/platform.h) is used to set public visibility
+    # on classes through the U_COMMON_API and U_I18N_API macros (among others).
+    # When linking against the system ICU library, we want its symbols to have
+    # public LTO visibility. This disables CFI checks for the ICU classes and
+    # allows whole-program optimization to be applied to the rest of Chromium.
+    #
+    # Both U_COMMON_API and U_I18N_API macros would be defined to U_EXPORT only
+    # when U_COMBINED_IMPLEMENTATION is defined (see unicode/utypes.h). Because
+    # we override the default system UCHAR_TYPE (char16_t), it is not possible
+    # to use U_COMBINED_IMPLEMENTATION at this moment, meaning the U_COMMON_API
+    # and U_I18N_API macros are set to U_IMPORT which is an empty definition.
+    #
+    # Until building with UCHAR_TYPE=char16_t is supported, one way to apply
+    # public visibility (and thus public LTO visibility) to all ICU classes is
+    # to define U_IMPORT to have the same value as U_EXPORT. For more details,
+    # please see: https://crbug.com/822820
+    "U_IMPORT=U_EXPORT",
   ]
 }
 
-generate_icuuc("icuuc_private_hidden_visibility") {
-  extra_configs = [ ":visibility_hidden" ]
-  if (icu_is_in_fuchsia) {
-      # See similar stanza above for details.
-      extra_configs += icu_fuchsia_extra_configs
-      extra_configs += icu_fuchsia_remove_configs
-      extra_configs -= icu_fuchsia_remove_configs
-  }
-  output_name = "icuuc_hidden_visibility"
-  visibility = [
-    ":icui18n_hidden_visibility",
-    ":icuuc_hidden_visibility",
+pkg_config("system_icui18n") {
+  packages = [ "icu-i18n" ]
+}
+
+pkg_config("system_icuuc") {
+  packages = [ "icu-uc" ]
+}
+
+source_set("icui18n") {
+  deps = [ ":icui18n_shim" ]
+  public_configs = [
+    ":icu_config",
+    ":system_icui18n",
   ]
-  if (is_fuchsia && !icu_is_in_fuchsia) {
-    fuchsia_output_name_postfix = "_hidden_visibility"
-  }
 }
 
-if (is_android && enable_java_templates) {
-  android_assets("icu_assets") {
-    if (icu_use_data_file) {
-      sources = [ "$root_out_dir/icudtl.dat" ]
-      deps = [ ":icudata" ]
-      disable_compression = true
-    }
-  }
+source_set("icuuc") {
+  deps = [ ":icuuc_shim" ]
+  public_configs = [
+    ":icu_config",
+    ":system_icuuc",
+  ]
 }
 
-if (is_android) {
-  data_dir = "android"
-} else if (is_ios && !use_blink) {
-  data_dir = "ios"
-} else if (is_chromeos) {
-  data_dir = "chromeos"
-} else if (current_cpu == "wasm") {
-  data_dir = "flutter"
-} else if (icu_is_in_fuchsia && icu_fuchsia_override_data_dir != "") {
-  # See //config.gni for details.
-  data_dir = icu_fuchsia_override_data_dir
-} else {
-  data_dir = "common"
+group("icuuc_public") {
+  public_deps = [ ":icuuc" ]
 }
 
-if (current_cpu == "mips" || current_cpu == "mips64" ||
-    host_byteorder == "big") {
-  data_bundle_prefix = "icudtb"
-} else {
-  data_bundle_prefix = "icudtl"
+shim_headers("icui18n_shim") {
+  root_path = "source/i18n"
+  headers = [
+    # This list can easily be updated using the commands below:
+    # cd third_party/icu/source/i18n
+    # find unicode -iname '*.h' -printf '    "%p",\n' | LC_ALL=C sort -u
+    "unicode/alphaindex.h",
+    "unicode/basictz.h",
+    "unicode/calendar.h",
+    "unicode/choicfmt.h",
+    "unicode/coleitr.h",
+    "unicode/coll.h",
+    "unicode/compactdecimalformat.h",
+    "unicode/curramt.h",
+    "unicode/currpinf.h",
+    "unicode/currunit.h",
+    "unicode/datefmt.h",
+    "unicode/dcfmtsym.h",
+    "unicode/decimfmt.h",
+    "unicode/dtfmtsym.h",
+    "unicode/dtitvfmt.h",
+    "unicode/dtitvinf.h",
+    "unicode/dtptngen.h",
+    "unicode/dtrule.h",
+    "unicode/fieldpos.h",
+    "unicode/fmtable.h",
+    "unicode/format.h",
+    "unicode/fpositer.h",
+    "unicode/gender.h",
+    "unicode/gregocal.h",
+    "unicode/listformatter.h",
+    "unicode/measfmt.h",
+    "unicode/measunit.h",
+    "unicode/measure.h",
+    "unicode/msgfmt.h",
+    "unicode/numfmt.h",
+    "unicode/numsys.h",
+    "unicode/plurfmt.h",
+    "unicode/plurrule.h",
+    "unicode/rbnf.h",
+    "unicode/rbtz.h",
+    "unicode/regex.h",
+    "unicode/region.h",
+    "unicode/reldatefmt.h",
+    "unicode/scientificnumberformatter.h",
+    "unicode/search.h",
+    "unicode/selfmt.h",
+    "unicode/simpletz.h",
+    "unicode/smpdtfmt.h",
+    "unicode/sortkey.h",
+    "unicode/stsearch.h",
+    "unicode/tblcoll.h",
+    "unicode/timezone.h",
+    "unicode/tmunit.h",
+    "unicode/tmutamt.h",
+    "unicode/tmutfmt.h",
+    "unicode/translit.h",
+    "unicode/tzfmt.h",
+    "unicode/tznames.h",
+    "unicode/tzrule.h",
+    "unicode/tztrans.h",
+    "unicode/ucal.h",
+    "unicode/ucol.h",
+    "unicode/ucoleitr.h",
+    "unicode/ucsdet.h",
+    "unicode/udat.h",
+    "unicode/udateintervalformat.h",
+    "unicode/udatpg.h",
+    "unicode/ufieldpositer.h",
+    "unicode/uformattable.h",
+    "unicode/ugender.h",
+    "unicode/ulocdata.h",
+    "unicode/umsg.h",
+    "unicode/unirepl.h",
+    "unicode/unum.h",
+    "unicode/unumsys.h",
+    "unicode/upluralrules.h",
+    "unicode/uregex.h",
+    "unicode/uregion.h",
+    "unicode/ureldatefmt.h",
+    "unicode/usearch.h",
+    "unicode/uspoof.h",
+    "unicode/utmscale.h",
+    "unicode/utrans.h",
+    "unicode/vtzone.h",
+  ]
 }
-data_bundle = "${data_bundle_prefix}.dat"
 
-# Some code paths end up not using these, marking them to avoid build
-# breaks.
-# See README.fuchsia for details.
-not_needed([
-             "data_bundle",
-             "data_bundle_prefix",
-             "data_dir",
-           ])
-
-if (icu_copy_icudata_to_root_build_dir) {
-  copy("copy_icudata") {
-    sources = [ "$data_dir/$data_bundle" ]
-    outputs = [ "$root_out_dir/$data_bundle" ]
-    data = [ "$root_out_dir/$data_bundle" ]
-  }
-}
-
-if (icu_use_data_file) {
-  if (is_ios) {
-    bundle_data("icudata") {
-      sources = [ "$data_dir/$data_bundle" ]
-      outputs = [ "{{bundle_resources_dir}}/{{source_file_part}}" ]
-    }
-  } else {
-    group("icudata") {
-      if (icu_copy_icudata_to_root_build_dir) {
-        # Guarded by a flag, to avoid name clashes if other build processes
-        # also happen to generate the output file by the same name.
-        # See README.fuchsia for details.
-        public_deps = [ ":copy_icudata" ]
-      }
-    }
-  }
-
-  if (is_chromeos) {
-    copy("icudata_hash") {
-      sources = [ "chromeos/icudtl.dat.hash" ]
-      outputs = [ "$root_out_dir/icudtl.dat.hash" ]
-      if (icu_copy_icudata_to_root_build_dir) {
-        data = [ "$root_out_dir/icudtl.dat.hash" ]
-      }
-    }
-  }
-} else {
-  if (current_cpu == "wasm") {
-    data_assembly = "$target_gen_dir/${data_bundle_prefix}_dat.cpp"
-  } else {
-    data_assembly = "$target_gen_dir/${data_bundle_prefix}_dat.S"
-  }
-  inline_data_assembly = "$target_gen_dir/${data_bundle_prefix}_dat.cc"
-  action("make_data_assembly") {
-    if (current_cpu == "wasm") {
-      # See scripts/make_data_cpp.py for details on building ICU for wasm.
-      script = "scripts/make_data_cpp.py"
-      inputs = [ "$data_dir/$data_bundle" ]
-      outputs = [ data_assembly ]
-      args = [
-        rebase_path(inputs[0], root_build_dir),
-        rebase_path(data_assembly, root_build_dir),
-      ]
-    } else {
-      script = "scripts/make_data_assembly.py"
-      inputs = [ "$data_dir/$data_bundle" ]
-      outputs = [ data_assembly ]
-      args = [
-        rebase_path(inputs[0], root_build_dir),
-        rebase_path(data_assembly, root_build_dir),
-      ]
-      if (is_mac || is_ios) {
-        args += [ "--mac" ]
-      } else if (is_win) {
-        if (target_cpu == "arm64" || target_cpu == "x64") {
-          args += [ "--win64" ]
-        } else if (target_cpu == "arm" || target_cpu == "x86") {
-          args += [ "--win32" ]
-        } else {
-          assert(false)
-        }
-      }
-    }
-  }
-
-  if (is_win) {
-    action("make_inline_data_assembly") {
-      deps = [ ":make_data_assembly" ]
-      script = "scripts/asm_to_inline_asm.py"
-      inputs = [ data_assembly ]
-      outputs = [ inline_data_assembly ]
-      args = rebase_path([
-                           data_assembly,
-                           inline_data_assembly,
-                         ],
-                         root_build_dir)
-    }
-  } else {
-    not_needed([ "inline_data_assembly" ])
-  }
-
-  source_set("icudata") {
-    defines = [ "U_HIDE_DATA_SYMBOL" ]
-    if (is_win) {
-      sources = [ inline_data_assembly ]
-      deps = [ ":make_inline_data_assembly" ]
-    } else {
-      sources = [ data_assembly ]
-      deps = [ ":make_data_assembly" ]
-      asmflags = []
-      if (current_cpu == "arm64") {
-        import("//build/config/arm.gni")
-        if (arm_control_flow_integrity == "standard") {
-          asmflags += [ "-mmark-bti-property" ]
-        }
-      }
-    }
-  }
+shim_headers("icuuc_shim") {
+  root_path = "source/common"
+  headers = [
+    # This list can easily be updated using the commands below:
+    # cd third_party/icu/source/common
+    # find unicode -iname '*.h' -printf '    "%p",\n' | LC_ALL=C sort -u
+    "unicode/appendable.h",
+    "unicode/brkiter.h",
+    "unicode/bytestream.h",
+    "unicode/bytestrie.h",
+    "unicode/bytestriebuilder.h",
+    "unicode/caniter.h",
+    "unicode/casemap.h",
+    "unicode/char16ptr.h",
+    "unicode/chariter.h",
+    "unicode/dbbi.h",
+    "unicode/docmain.h",
+    "unicode/dtintrv.h",
+    "unicode/edits.h",
+    "unicode/enumset.h",
+    "unicode/errorcode.h",
+    "unicode/filteredbrk.h",
+    "unicode/icudataver.h",
+    "unicode/icuplug.h",
+    "unicode/idna.h",
+    "unicode/localematcher.h",
+    "unicode/localpointer.h",
+    "unicode/locdspnm.h",
+    "unicode/locid.h",
+    "unicode/messagepattern.h",
+    "unicode/normalizer2.h",
+    "unicode/normlzr.h",
+    "unicode/parseerr.h",
+    "unicode/parsepos.h",
+    "unicode/platform.h",
+    "unicode/ptypes.h",
+    "unicode/putil.h",
+    "unicode/rbbi.h",
+    "unicode/rep.h",
+    "unicode/resbund.h",
+    "unicode/schriter.h",
+    "unicode/simpleformatter.h",
+    "unicode/std_string.h",
+    "unicode/strenum.h",
+    "unicode/stringpiece.h",
+    "unicode/stringtriebuilder.h",
+    "unicode/symtable.h",
+    "unicode/ubidi.h",
+    "unicode/ubiditransform.h",
+    "unicode/ubrk.h",
+    "unicode/ucasemap.h",
+    "unicode/ucat.h",
+    "unicode/uchar.h",
+    "unicode/ucharstrie.h",
+    "unicode/ucharstriebuilder.h",
+    "unicode/uchriter.h",
+    "unicode/uclean.h",
+    "unicode/ucnv.h",
+    "unicode/ucnv_cb.h",
+    "unicode/ucnv_err.h",
+    "unicode/ucnvsel.h",
+    "unicode/uconfig.h",
+    "unicode/ucurr.h",
+    "unicode/udata.h",
+    "unicode/udisplaycontext.h",
+    "unicode/uenum.h",
+    "unicode/uidna.h",
+    "unicode/uiter.h",
+    "unicode/uldnames.h",
+    "unicode/ulistformatter.h",
+    "unicode/uloc.h",
+    "unicode/umachine.h",
+    "unicode/umisc.h",
+    "unicode/unifilt.h",
+    "unicode/unifunct.h",
+    "unicode/unimatch.h",
+    "unicode/uniset.h",
+    "unicode/unistr.h",
+    "unicode/unorm.h",
+    "unicode/unorm2.h",
+    "unicode/uobject.h",
+    "unicode/urename.h",
+    "unicode/urep.h",
+    "unicode/ures.h",
+    "unicode/uscript.h",
+    "unicode/uset.h",
+    "unicode/usetiter.h",
+    "unicode/ushape.h",
+    "unicode/usprep.h",
+    "unicode/ustring.h",
+    "unicode/ustringtrie.h",
+    "unicode/utext.h",
+    "unicode/utf.h",
+    "unicode/utf16.h",
+    "unicode/utf32.h",
+    "unicode/utf8.h",
+    "unicode/utf_old.h",
+    "unicode/utrace.h",
+    "unicode/utypes.h",
+    "unicode/uvernum.h",
+    "unicode/uversion.h",
+  ]
 }

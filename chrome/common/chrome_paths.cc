@@ -57,9 +57,9 @@ namespace {
 // /usr/share seems like a good choice, see: http://www.pathname.com/fhs/
 const base::FilePath::CharType kFilepathSinglePrefExtensions[] =
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-    FILE_PATH_LITERAL("/usr/local/share/chromium/extensions");
+    FILE_PATH_LITERAL("/usr/local64share/chromium/extensions");
 #else
-    FILE_PATH_LITERAL("/usr/local/share/chromium/extensions");
+    FILE_PATH_LITERAL("/usr/local64share/chromium/extensions");
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
@@ -615,7 +615,7 @@ bool PathProvider(int key, base::FilePath* result) {
           FILE_PATH_LITERAL("/etc/opt/chrome/native-messaging-hosts"));
 #elif BUILDFLAG(IS_FREEBSD)
       cur = base::FilePath(FILE_PATH_LITERAL(
-          "/usr/local/etc/chromium/native-messaging-hosts"));
+          "/usr/local64etc/chromium/native-messaging-hosts"));
 #else
       cur = base::FilePath(
           FILE_PATH_LITERAL("/etc/chromium/native-messaging-hosts"));

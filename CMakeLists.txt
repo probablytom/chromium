@@ -571,6 +571,7 @@ set(GN_ARGS_BASE
   enable_perfetto_unittests=false
   enable_perfetto_zlib=false
   enable_rust=true
+  enable_screen_ai_browsertests=false
   enable_trace_logging=true
   extra_ldflags="-Wl,-znotext,-L${toolchain-lib},-L/usr/local/lib -g -O0"
   fatal_linker_warnings=false
@@ -674,13 +675,12 @@ add_custom_target(hooks ALL
 set(DOLLAR "$")
 add_custom_target(pre-configure
   #COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gn/bootstrap/bootstrap.py --debug --no-clean --no-rebuild --skip-generate-buildfiles
-  COMMAND echo "checkout_google_benchmark = false" > build/config/gclient_args.gni
   COMMAND sed -i "" -e 's/\\\/usr\\\/local[^6]\\/\/usr\\\/local64/g' ${CMAKE_SOURCE_DIR}/base/base_paths_posix.cc
   COMMAND sed -i "" -e 's/\\\/usr\\\/local[^6]/\\\/usr\\\/local64/g' ${CMAKE_SOURCE_DIR}/chrome/common/chrome_paths.cc
   COMMAND sed -i "" -e 's/\\\/usr\\\/local[^6]/\\\/usr\\\/local64/g' ${CMAKE_SOURCE_DIR}/third_party/fontconfig/include/config.h
   COMMAND sed -i "" -e 's/\\\/usr\\\/local[^6]/\\\/usr\\\/local64/g' ${CMAKE_SOURCE_DIR}/third_party/test_fonts/fontconfig/BUILD.gn
-  COMMAND sed -i "" -e 's/\\\/usr\\\/local[^6]/\\\/usr\\\/local64/g' ${CMAKE_SOURCE_DIR}/third_party/vulkan-deps/vulkan-loader/src/BUILD.gn
-  COMMAND sed -i "" -e 's/\\\/usr\\\/local[^6]/\\\/usr\\\/local64/g' ${CMAKE_SOURCE_DIR}/third_party/vulkan-deps/vulkan-loader/src/loader/vk_loader_platform.h
+  #COMMAND sed -i "" -e 's/\\\/usr\\\/local[^6]/\\\/usr\\\/local64/g' ${CMAKE_SOURCE_DIR}/third_party/vulkan-deps/vulkan-loader/src/BUILD.gn
+  #COMMAND sed -i "" -e 's/\\\/usr\\\/local[^6]/\\\/usr\\\/local64/g' ${CMAKE_SOURCE_DIR}/third_party/vulkan-deps/vulkan-loader/src/loader/vk_loader_platform.h
   COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_SOURCE_DIR}/build/linux/unbundle/replace_gn_files.py --system-libraries dav1d flac fontconfig freetype harfbuzz-ng icu libdrm libevent libpng libusb libwebp libxml libxslt openh264 opus snappy || false
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/third_party/ffmpeg/chromium/config/Chrome/linux/ ${CMAKE_SOURCE_DIR}/third_party/ffmpeg/chromium/config/Chrome/freebsd
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/third_party/ffmpeg/chromium/config/Chromium/linux/ ${CMAKE_SOURCE_DIR}/third_party/ffmpeg/chromium/config/Chromium/freesbd
@@ -821,5 +821,5 @@ add_custom_target(cheri-on
 )
 
 add_custom_target(run
-	COMMAND gdb --args ${gn-dir}/${JS_SHELL} --sandbox-fuzzing --no-maglev
+	COMMAND gdb --args ${gn-dir}/${JS_SHELL} --no-maglev # --sandbox-fuzzing 
 )

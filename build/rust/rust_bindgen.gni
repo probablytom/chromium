@@ -18,7 +18,8 @@ if (host_os == "win") {
 
 # On Windows, the libclang.dll is beside the bindgen.exe, otherwise it is in
 # ../lib.
-_libclang_path = "/usr/local64/llvm${MODCLANG_VERSION}"
+#_libclang_path = "/usr/local64/llvm${MODCLANG_VERSION}"
+_libclang_path = rust_bindgen_root
 if (host_os == "win") {
   _libclang_path += "/bin"
 } else {

@@ -1,0 +1,24 @@
+--- chrome/updater/BUILD.gn.orig	2025-01-08 11:29:16.145485000 +0000
++++ chrome/updater/BUILD.gn	2025-01-08 11:30:04.549867000 +0000
+@@ -367,9 +367,9 @@
+         "update_service_internal_impl_qualifying_linux.cc",
+         "update_usage_stats_task_linux.cc",
+       ]
+-      public_configs = [
+-        "linux:libcurl",
+-        "linux:libsystemd",
++      libs = [
++        "curl",
++        "systemd",
+       ]
+     }
+   }
+@@ -1040,7 +1040,7 @@
+ 
+       data += [ "//chrome/test/data/updater/updater_qualification_app.crx" ]
+       data_deps += [ "//chrome/updater/linux:updater_test" ]
+-      public_configs = [ "linux:libsystemd" ]
++      libs = [ "systemd" ]
+     }
+ 
+     if (is_posix) {
